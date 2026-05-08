@@ -770,7 +770,7 @@ const styles = {
         display: 'flex',
         width: '100%',
         position: 'relative',
-        userSelect: 'none'
+        userSelect: 'text'
     },
     messageBubble: {
         maxWidth: '80%',

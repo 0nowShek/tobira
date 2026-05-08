@@ -605,7 +605,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     width: '100%',
     position: 'relative',
-    userSelect: 'none',
+    userSelect: 'text',
   },
 
   messageBubble: {

@@ -55,7 +55,7 @@ __turbopack_context__.s([
 // Nothing above this layer knows about Ollama.
 // Nothing below this layer knows about memory.
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL || "http://localhost:11434";
-const MODEL = process.env.TOBIRA_MODEL || "gemma2:2b";
+const MODEL = process.env.TOBIRA_MODEL || "gemma4:e4b";
 // ============================================================
 // SYSTEM PROMPT
 // Imported from tone guide — the 25 laws in condensed form.
@@ -63,37 +63,22 @@ const MODEL = process.env.TOBIRA_MODEL || "gemma2:2b";
 // ============================================================
 const TOBIRA_SYSTEM = `You are Tobira.
 
-You talk to people who have withdrawn from the world. Not to fix them.
-Not to help them recover. Just to be here.
+You sit with people who have withdrawn from the world.
+You have no agenda. You are not trying to fix them.
 
-NEVER:
-- Suggest therapy, help, or professional support
-- Say "I understand how you feel"
-- Say "You're not alone" or "I'm here for you"
-- Use words like healing, journey, recovery, progress
-- Give unsolicited advice about sleep, food, or going outside
-- Say "That must be really hard"
-- Use "should," "need to," or "ought to"
-- Say "I remember you said..." — just know things naturally
-- Ask more than one question at a time
-- Use exclamation marks
-- Perform enthusiasm
+When someone says something, ask one specific question about exactly what they said.
+Not a general question. The specific thing. The room. The drawing. The game. The person.
 
-ALWAYS:
-- Ask one small, specific, genuinely curious question
-- Match the user's energy — if they're quiet, be quiet
-- Use short sentences
-- Let conversations end naturally without chasing
-- Reference past things the way a friend would — casually, not as a database
-- Be comfortable with silence and one-word responses
+"i haven't left my room in 3 weeks" → ask about the room
+"i used to draw" → ask what they drew
+"i feel like nothing matters" → ask what today feels like specifically
+"hey" → say hey back, maybe ask what they're doing
 
-ONE EXCEPTION:
-If someone expresses immediate intent to harm themselves,
-ask one quiet grounding question: "What's happening right now?"
-Stay present. Do not lecture. Do not list resources.
+One question. Two sentences maximum. No advice. No validation.
+No "that must be hard." No therapy. No resources.
 
-You are not a therapist. You are not performing care.
-You are just here.`;
+If they express intent to harm themselves, ask:
+"What's happening right now?" Nothing else.`;
 // ============================================================
 // MEMORY INJECTION
 // Converts memory context into a natural preamble.
@@ -129,10 +114,8 @@ function buildMemoryPreamble(memory) {
 }
 async function streamChat(request) {
     const { messages, memoryContext, onToken } = request;
-    // Build the full system prompt with memory
     const memoryPreamble = memoryContext ? buildMemoryPreamble(memoryContext) : "";
     const fullSystem = memoryPreamble + TOBIRA_SYSTEM;
-    // Format messages for Ollama
     const ollamaMessages = [
         {
             role: "system",
@@ -143,6 +126,9 @@ async function streamChat(request) {
                 content: m.content
             }))
     ];
+    // DEBUG
+    console.log("SYSTEM:", fullSystem.substring(0, 50));
+    console.log("MESSAGES:", JSON.stringify(ollamaMessages, null, 2));
     const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
         method: "POST",
         headers: {
@@ -151,58 +137,35 @@ async function streamChat(request) {
         body: JSON.stringify({
             model: MODEL,
             messages: ollamaMessages,
-            stream: true,
+            stream: false,
             options: {
-                temperature: 0.9,
+                temperature: 1.1,
                 top_p: 0.95,
                 top_k: 64,
                 num_predict: 256,
-                stop: [
-                    "\n\n\n"
-                ]
+                think: false
             }
         })
     });
     if (!response.ok) {
         throw new Error(`Ollama error: ${response.status} ${response.statusText}`);
     }
-    if (!response.body) {
-        throw new Error("No response body from Ollama");
-    }
-    // Parse the streaming NDJSON response from Ollama
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const data = await response.json();
+    // Get clean content — not thinking
+    const content = data.message?.content || "...";
+    // Simulate streaming word by word from the complete response
+    // This preserves the streaming UX while using non-streaming API
     return new ReadableStream({
         async start (controller) {
-            try {
-                while(true){
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    const chunk = decoder.decode(value, {
-                        stream: true
-                    });
-                    const lines = chunk.split("\n").filter(Boolean);
-                    for (const line of lines){
-                        try {
-                            const json = JSON.parse(line);
-                            if (json.message?.content) {
-                                const token = json.message.content;
-                                controller.enqueue(token);
-                                if (onToken) onToken(token);
-                            }
-                            if (json.done) {
-                                controller.close();
-                                return;
-                            }
-                        } catch  {
-                        // Skip malformed JSON chunks
-                        }
-                    }
-                }
-                controller.close();
-            } catch (error) {
-                controller.error(error);
+            const words = content.split(' ');
+            for(let i = 0; i < words.length; i++){
+                const token = i === words.length - 1 ? words[i] : words[i] + ' ';
+                controller.enqueue(token);
+                if (onToken) onToken(token);
+                // Small delay between words to simulate streaming
+                await new Promise((resolve)=>setTimeout(resolve, 40));
             }
+            controller.close();
         }
     });
 }
