@@ -1,21 +1,22 @@
 // lib/voice.ts
-// TOBIRA — Voice Engine
+// TOBIRA — Voice Engine (ElevenLabs)
 //
-// Speaks Tobira's responses word by word as they stream in.
-// Not text-to-speech after the fact.
-// Word by word. In sync with text appearing on screen.
-// That's the difference between a screen reader and a presence.
-
-// ============================================================
-// VOICE PREFERENCES
-// Stored in localStorage. User controls this.
-// ============================================================
+// Server-mediated TTS — API key never reaches the browser.
+// Sentences accumulate as tokens stream in.
+// Playback queues in arrival order.
+// One presence. One voice.
 
 export type VoiceMode = 'off' | 'soft' | 'quieter';
 
+// ============================================================
+// PREFERENCES
+// ============================================================
+
 export function getVoicePreference(): VoiceMode {
   if (typeof window === 'undefined') return 'off';
-  return (localStorage.getItem('tobira_voice') as VoiceMode) || 'off';
+  const v = localStorage.getItem('tobira_voice');
+  if (v === 'soft' || v === 'quieter' || v === 'off') return v;
+  return 'off';
 }
 
 export function setVoicePreference(mode: VoiceMode): void {
@@ -24,87 +25,200 @@ export function setVoicePreference(mode: VoiceMode): void {
 }
 
 // ============================================================
-// VOICE SELECTOR
-// Finds the best available voice for Tobira.
-// Priority order — warmest voices first.
+// CONFIGURATION CHECK
+// Calls /api/tts to verify server has API key set.
 // ============================================================
 
-const PREFERRED_VOICES = [
-  'Samantha',        // Mac/iOS — warm, calm
-  'Karen',           // Mac — slightly lower
-  'Moira',           // Mac — Irish, gentle
-  'Microsoft Zira',  // Windows — cleaner than default
-  'Google US English', // Chrome
-];
-
-let selectedVoice: SpeechSynthesisVoice | null = null;
-
-export function initVoice(): void {
-  if (typeof window === 'undefined') return;
-  if (!window.speechSynthesis) return;
-
-  const setVoice = () => {
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length === 0) return;
-
-    // Try preferred voices first
-    for (const name of PREFERRED_VOICES) {
-      const match = voices.find(v => v.name.includes(name));
-      if (match) {
-        selectedVoice = match;
-        return;
-      }
-    }
-
-    // Fallback — first English voice
-    const english = voices.find(v => v.lang.startsWith('en'));
-    selectedVoice = english || voices[0];
-  };
-
-  // Voices load asynchronously in some browsers
-  if (window.speechSynthesis.getVoices().length > 0) {
-    setVoice();
-  } else {
-    window.speechSynthesis.onvoiceschanged = setVoice;
+export async function checkTTSConfigured(): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  try {
+    const res = await fetch('/api/tts');
+    if (!res.ok) return false;
+    const data = await res.json() as { enabled?: boolean };
+    return Boolean(data.enabled);
+  } catch {
+    return false;
   }
 }
 
 // ============================================================
-// SPEAK WORD
-// Called for each word as it streams in.
-// Handles pauses after punctuation.
+// PLAYBACK STATE
+// Module-level — one audio queue per page session.
 // ============================================================
 
-export function speakWord(word: string, mode: VoiceMode): void {
+let _accumulator = '';
+let _epoch = 0;
+let _chain: Promise<void> = Promise.resolve();
+let _audio: HTMLAudioElement | null = null;
+
+function volumeFor(mode: VoiceMode): number {
+  if (mode === 'off') return 0;
+  return mode === 'quieter' ? 0.45 : 0.72;
+}
+
+// ============================================================
+// SENTENCE DETECTION
+// Finds the end of the first complete sentence in text.
+// Returns the index of the final punctuation character, or null.
+// ============================================================
+
+function findSentenceEnd(text: string): number | null {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '?' || ch === '!' || ch === '…') return i;
+    if (ch === '.') {
+      let j = i;
+      while (j < text.length && text[j] === '.') j++;
+      const after = text[j];
+      if (after === undefined || /\s/.test(after)) return j - 1;
+    }
+  }
+  return null;
+}
+
+// ============================================================
+// ENQUEUE SYNTHESIS
+// Fetches audio for one sentence and appends to playback chain.
+// Epoch check prevents stale audio from playing after stopTTS().
+// ============================================================
+
+function enqueue(text: string, mode: VoiceMode, epoch: number): void {
+  if (mode === 'off' || !text.trim()) return;
+
+  _chain = _chain.then(async () => {
+    if (epoch !== _epoch) return;
+
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.trim() }),
+      });
+
+      if (!res.ok || epoch !== _epoch) return;
+
+      const blob = await res.blob();
+      if (epoch !== _epoch) return;
+
+      const url = URL.createObjectURL(blob);
+
+      await new Promise<void>(resolve => {
+        if (epoch !== _epoch) {
+          URL.revokeObjectURL(url);
+          resolve();
+          return;
+        }
+
+        const el = new Audio();
+        _audio = el;
+        el.volume = volumeFor(mode);
+        el.src = url;
+
+        el.onended = () => {
+          URL.revokeObjectURL(url);
+          if (_audio === el) _audio = null;
+          resolve();
+        };
+        el.onerror = () => {
+          URL.revokeObjectURL(url);
+          if (_audio === el) _audio = null;
+          resolve();
+        };
+
+        void el.play().catch(() => {
+          URL.revokeObjectURL(url);
+          if (_audio === el) _audio = null;
+          resolve();
+        });
+      });
+
+    } catch {
+      // Network glitch or aborted — continue chain
+    }
+  });
+}
+
+// ============================================================
+// DRAIN ACCUMULATOR
+// Pulls complete sentences from the accumulator and enqueues them.
+// Leaves incomplete sentence fragment in accumulator.
+// ============================================================
+
+function drain(mode: VoiceMode): void {
+  if (mode === 'off') {
+    _accumulator = '';
+    return;
+  }
+
+  const epoch = _epoch;
+  let work = _accumulator;
+  const sentences: string[] = [];
+
+  while (work.length) {
+    const end = findSentenceEnd(work);
+    if (end === null) break;
+    const phrase = work.slice(0, end + 1).trim();
+    if (phrase) sentences.push(phrase);
+    work = work.slice(end + 1).trimStart();
+  }
+
+  _accumulator = work;
+  for (const s of sentences) enqueue(s, mode, epoch);
+}
+
+// ============================================================
+// PUBLIC API
+// ============================================================
+
+/**
+ * Feed a word token into the TTS engine.
+ * Called for each word as it streams in from the model.
+ * Sentences are synthesized as they complete.
+ */
+export function feedWord(word: string, mode: VoiceMode): void {
+  if (mode === 'off' || !word.trim()) return;
+  _accumulator += (_accumulator ? ' ' : '') + word.trim();
+  drain(mode);
+}
+
+/**
+ * Flush any remaining text in the accumulator.
+ * Call after the model stream ends.
+ */
+export function flushVoice(mode: VoiceMode): void {
   if (mode === 'off') return;
-  if (typeof window === 'undefined') return;
-  if (!window.speechSynthesis) return;
-  if (!word.trim()) return;
+  const rest = _accumulator.trim();
+  _accumulator = '';
+  if (rest) enqueue(rest, mode, _epoch);
+}
 
-  const utterance = new SpeechSynthesisUtterance(word);
-
-  // Voice settings
-  if (selectedVoice) utterance.voice = selectedVoice;
-  utterance.rate = 0.88;                           // Slightly slower — unhurried
-  utterance.pitch = 0.92;                          // Slightly lower — calm
-  utterance.volume = mode === 'quieter' ? 0.5 : 0.8;
-
-  window.speechSynthesis.speak(utterance);
+/**
+ * Stop all speech immediately.
+ * Cancels in-flight requests and pauses current audio.
+ */
+export function stopVoice(): void {
+  _epoch++;
+  _accumulator = '';
+  _chain = Promise.resolve();
+  if (_audio) {
+    _audio.pause();
+    _audio.src = '';
+    _audio.load();
+    _audio = null;
+  }
 }
 
 // ============================================================
 // WORD BUFFER
-// Accumulates tokens until a complete word is ready.
-// Returns the word to speak and resets the buffer.
+// Accumulates streaming tokens into complete words.
+// Returns a word when a boundary is detected.
 // ============================================================
 
 export class WordBuffer {
-  private buffer: string = '';
+  private buffer = '';
 
   add(token: string): string | null {
     this.buffer += token;
-
-    // Complete word detected — space, punctuation, or end
     if (
       this.buffer.endsWith(' ') ||
       this.buffer.endsWith('\n') ||
@@ -114,11 +228,9 @@ export class WordBuffer {
       this.buffer = '';
       return word || null;
     }
-
     return null;
   }
 
-  // Flush remaining buffer at end of stream
   flush(): string | null {
     const word = this.buffer.trim();
     this.buffer = '';
@@ -127,7 +239,7 @@ export class WordBuffer {
 }
 
 // ============================================================
-// PAUSE LOGIC
+// PAUSE DURATIONS
 // Natural pauses after punctuation.
 // Makes Tobira sound like it means what it says.
 // ============================================================
@@ -144,26 +256,4 @@ export function getPauseDuration(word: string): number {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// ============================================================
-// STOP SPEAKING
-// Called when user sends a new message or toggles voice off.
-// Cancels any in-progress speech immediately.
-// ============================================================
-
-export function stopSpeaking(): void {
-  if (typeof window === 'undefined') return;
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-}
-
-// ============================================================
-// VOICE AVAILABLE CHECK
-// Some browsers don't support Web Speech API.
-// ============================================================
-
-export function isVoiceAvailable(): boolean {
-  if (typeof window === 'undefined') return false;
-  return 'speechSynthesis' in window;
 }

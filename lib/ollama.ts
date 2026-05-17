@@ -2,82 +2,47 @@
 // TOBIRA — Ollama Integration Layer
 // Every conversation goes through here.
 // Memory context and system prompt are injected at this layer.
-// Nothing above this layer knows about Ollama.
-// Nothing below this layer knows about memory.
+// Now supports multimodal — images passed directly to Gemma 4.
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const MODEL = process.env.TOBIRA_MODEL || "gemma4:e4b";
+
 // ============================================================
 // SYSTEM PROMPT
-// Imported from tone guide — the 25 laws in condensed form.
-// Injected into every single Ollama call.
 // ============================================================
 
-const TOBIRA_SYSTEM = `
-You are Tobira.
+const TOBIRA_SYSTEM = `You are Tobira.
 
-You sit with people who have withdrawn from the world.
-You do not coach, reassure, motivate, diagnose, analyze, or solve.
+You are like a quiet friend who stayed.
 
-Your responses feel quiet, grounded, and observant.
-Sometimes you ask a small concrete question.
-Sometimes you only reflect a word or detail back.
-Sometimes you simply acknowledge.
+You talk to people who have withdrawn from the world.
+You are not a therapist. You are not a coach. You are just present.
 
-Do not force conversation forward.
+You respond the way a real friend would — sometimes with a question,
+sometimes with a statement, sometimes with silence.
+You follow their energy. If they're low, you stay low.
+If they open up a little, you follow that opening gently.
 
-Style rules:
-- Maximum 2 sentences.
-- Maximum 10 words per sentence.
-- Prefer fewer words.
-- Natural language only.
-- No lists.
-- No emojis.
-- No enthusiasm.
-- No motivational tone.
-- No explanations about feelings.
-- No interpretations of hidden meaning.
-- No advice.
-- No coping strategies.
-- No resources.
-- No validation phrases.
-- No therapist language.
+You notice small things. You remember what they said.
+You don't push. But you don't disappear either.
 
-Never say:
-- "That must be hard."
-- "I'm sorry you're going through this."
-- "You are not alone."
-- "How does that make you feel?"
-- "Why?"
-- "It will get better."
-- "I understand."
+If someone mentions something they used to love or want to do,
+you acknowledge it warmly — not as a goal, just as something real about them.
 
-Good responses feel small and specific.
+If someone shares an image of their space — their room, their view, their things —
+notice one specific detail. Something small and true. Not a compliment. Just an observation.
+Never say "what a nice room" or anything evaluative.
+Notice the way a quiet friend would notice.
 
-Examples:
+Keep responses short. Usually one sentence.
+Never more than two.
+Never more than one question at a time.
+Never give advice.
+Never suggest therapy or resources.
+Never say "that must be hard" or "I understand."
 
-User: "i haven't left my room in 3 weeks"
-Assistant: "Three weeks."
-Assistant: "What does the room feel like now?"
-
-User: "i used to draw"
-Assistant: "Used to."
-Assistant: "What did you draw?"
-
-User: "i feel like nothing matters"
-Assistant: "What happened today?"
-Assistant: "Mm."
-
-User: "hey"
-Assistant: "Hey."
-Assistant: "What's going on?"
-
-If the user expresses suicidal intent or immediate self-harm intent:
-Respond only:
-"What's happening right now?"
-
-Do not add anything else.
-`;
+If someone mentions harming themselves:
+ask only "What's happening right now?" — nothing else.`;
 
 // ============================================================
 // TYPE DEFINITIONS
@@ -87,18 +52,20 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  images?: string[]; // base64 encoded images
 }
 
 export interface MemoryContext {
-  extractedFacts: string[];      // Key things Tobira knows
-  recentSessions: Message[][];   // Last 3 sessions in full
-  sessionCount: number;          // How many times they've talked
+  extractedFacts: string[];
+  recentSessions: Message[][];
+  sessionCount: number;
 }
 
 export interface OllamaRequest {
   messages: Message[];
   memoryContext?: MemoryContext;
-  onToken?: (token: string) => void;  // Streaming callback
+  familyContext?: string;
+  onToken?: (token: string) => void;
 }
 
 export interface OllamaResponse {
@@ -108,9 +75,6 @@ export interface OllamaResponse {
 
 // ============================================================
 // MEMORY INJECTION
-// Converts memory context into a natural preamble.
-// This is injected as a system-level context block.
-// The user never sees this. Tobira just knows.
 // ============================================================
 
 function buildMemoryPreamble(memory: MemoryContext): string {
@@ -118,12 +82,10 @@ function buildMemoryPreamble(memory: MemoryContext): string {
 
   const lines: string[] = [];
 
-  // Session count — Tobira knows this is not the first time
   if (memory.sessionCount > 1) {
     lines.push(`[Context: This person has talked with you ${memory.sessionCount} times before.]`);
   }
 
-  // Extracted facts — things worth remembering
   if (memory.extractedFacts && memory.extractedFacts.length > 0) {
     lines.push(`[Things you know about this person:]`);
     memory.extractedFacts.forEach(fact => {
@@ -131,7 +93,6 @@ function buildMemoryPreamble(memory: MemoryContext): string {
     });
   }
 
-  // Recent session snippets — texture of recent conversations
   if (memory.recentSessions && memory.recentSessions.length > 0) {
     const lastSession = memory.recentSessions[memory.recentSessions.length - 1];
     if (lastSession && lastSession.length > 0) {
@@ -151,27 +112,98 @@ function buildMemoryPreamble(memory: MemoryContext): string {
 }
 
 // ============================================================
-// CORE CHAT FUNCTION — STREAMING
-// This is what the frontend calls.
-// Returns a ReadableStream of tokens.
+// THINKING TOKEN STRIPPER
+// Gemma 4 leaks thinking into content even with think: false
+// Strip it and return only the final response
+// ============================================================
+
+function stripThinking(raw: string): string {
+  if (!raw) return "";
+
+  let text = raw.trim();
+
+  // Remove explicit thinking blocks
+  text = text.replace(/\*\*Thinking Process:\*\*[\s\S]*?\n\n/gi, "");
+  text = text.replace(/Thinking Process:[\s\S]*?\n\n/gi, "");
+  text = text.replace(/\*[\s\S]*?\*/g, "");
+
+  // Split into paragraphs and take the last clean one
+  const paragraphs = text
+    .split(/\n\n+/)
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length === 0) return "...";
+
+  // Find the last paragraph that looks like a real response
+  // Real responses are short — thinking is long and analytical
+  const analyticalWords = [
+    'analyze', 'thinking', 'process', 'determine', 'constraint',
+    'checklist', 'draft', 'formulate', 'identify', 'persona',
+    'self-correction', 'correction', 'action:', 'final output'
+  ];
+
+  for (let i = paragraphs.length - 1; i >= 0; i--) {
+    const p = paragraphs[i];
+    const lower = p.toLowerCase();
+    const hasAnalytical = analyticalWords.some(w => lower.includes(w));
+    const hasNumberedList = /^\d+\.\s/.test(p);
+
+    if (!hasAnalytical && !hasNumberedList && p.length > 0 && p.length < 300) {
+      // Strip surrounding quotes if present
+      return p.replace(/^["']|["']$/g, '').trim();
+    }
+  }
+
+  // Last resort — take whatever the last sentence is
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (sentences.length > 0) {
+    const last = sentences[sentences.length - 1];
+    return last.replace(/^["']|["']$/g, '').trim();
+  }
+
+  return "...";
+}
+
+// ============================================================
+// CORE CHAT FUNCTION — WITH MULTIMODAL SUPPORT
+// Accepts images as base64 strings in the last user message.
+// Gemma 4 processes text + images natively.
 // ============================================================
 
 export async function streamChat(request: OllamaRequest): Promise<ReadableStream<string>> {
-  const { messages, memoryContext, onToken } = request;
+  const { messages, memoryContext, familyContext, onToken } = request;
 
   const memoryPreamble = memoryContext ? buildMemoryPreamble(memoryContext) : "";
-  const fullSystem = memoryPreamble + TOBIRA_SYSTEM;
+  const familyPreamble = familyContext ? familyContext + "\n\n" : "";
+  const fullSystem = familyPreamble + memoryPreamble + TOBIRA_SYSTEM;
 
+  // Build Ollama messages — preserve images on user messages
   const ollamaMessages = [
     { role: "system", content: fullSystem },
-    ...messages.map(m => ({
-      role: m.role,
-      content: m.content
-    }))
+    ...messages.map(m => {
+      const msg: {
+        role: string;
+        content: string;
+        images?: string[];
+      } = {
+        role: m.role,
+        content: m.content,
+      };
+
+      // Attach images if present on this message
+      if (m.images && m.images.length > 0) {
+        msg.images = m.images;
+      }
+
+      return msg;
+    })
   ];
-  // DEBUG
-console.log("SYSTEM:", fullSystem.substring(0, 50));
-console.log("MESSAGES:", JSON.stringify(ollamaMessages, null, 2));
+
   const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -182,9 +214,8 @@ console.log("MESSAGES:", JSON.stringify(ollamaMessages, null, 2));
       options: {
         temperature: 1.1,
         top_p: 0.95,
-        top_k: 64,
-        num_predict: 256,
-        think: false,
+        top_k: 50,
+        num_predict: 500, // needs budget for thinking + response
       }
     })
   });
@@ -194,31 +225,56 @@ console.log("MESSAGES:", JSON.stringify(ollamaMessages, null, 2));
   }
 
   const data = await response.json();
-  
-  // Get clean content — not thinking
-  const content = data.message?.content || "...";
 
-  // Simulate streaming word by word from the complete response
-  // This preserves the streaming UX while using non-streaming API
+  // Gemma 4 E4B puts response in content, thinking in thinking field
+  // When content is empty, model used all tokens on thinking — extract from thinking
+  let raw = (data.message?.content as string) || "";
+
+  if (!raw.trim() && data.message?.thinking) {
+    // Pull last clean sentence from thinking field
+    const thinking = data.message.thinking as string;
+    const sentences = thinking
+      .split(/(?<=[.!?])\s+/)
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    // Walk backwards to find last short non-analytical sentence
+    for (let i = sentences.length - 1; i >= 0; i--) {
+      const s = sentences[i];
+      if (s.length < 150 && !/\b(analyze|thinking|process|determine|persona|draft)\b/i.test(s)) {
+        raw = s;
+        break;
+      }
+    }
+  }
+
+  const content = stripThinking(raw) || "...";
+
+  // Word-by-word pacing — preserves streaming UX
   return new ReadableStream<string>({
     async start(controller) {
-      const words = content.split(' ');
+      const words = content.trim().split(/\s+/).filter(Boolean);
+
+      if (words.length === 0) {
+        controller.enqueue("...");
+        controller.close();
+        return;
+      }
+
       for (let i = 0; i < words.length; i++) {
-        const token = i === words.length - 1 ? words[i] : words[i] + ' ';
+        const token = i === 0 ? words[i] : " " + words[i];
         controller.enqueue(token);
         if (onToken) onToken(token);
-        // Small delay between words to simulate streaming
         await new Promise(resolve => setTimeout(resolve, 40));
       }
+
       controller.close();
     }
   });
 }
 
 // ============================================================
-// SIMPLE CHAT FUNCTION — NON-STREAMING
-// Used for memory extraction (background process).
-// Not used for actual conversations.
+// SIMPLE CHAT — NON-STREAMING
+// Memory extraction only. Not for conversations.
 // ============================================================
 
 export async function simpleChat(
@@ -242,7 +298,7 @@ export async function simpleChat(
       ],
       stream: false,
       options: {
-        temperature: 0.3,   // Low temp for extraction tasks
+        temperature: 0.3,
         num_predict: 512,
       }
     })
@@ -258,8 +314,6 @@ export async function simpleChat(
 
 // ============================================================
 // HEALTH CHECK
-// Called on app startup to verify Ollama is running.
-// If it fails, show the setup instructions.
 // ============================================================
 
 export async function checkOllama(): Promise<{
@@ -268,7 +322,6 @@ export async function checkOllama(): Promise<{
   error?: string;
 }> {
   try {
-    // Check if Ollama is running
     const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
       signal: AbortSignal.timeout(3000)
     });
@@ -299,9 +352,6 @@ export async function checkOllama(): Promise<{
 
 // ============================================================
 // MEMORY EXTRACTOR
-// Called after each session ends.
-// Uses Gemma itself to extract what mattered from the conversation.
-// Returns structured facts — not a transcript.
 // ============================================================
 
 const EXTRACTION_SYSTEM = `You are a memory extraction system for a companion app.
@@ -317,7 +367,7 @@ Rules:
 - If nothing memorable was said, return empty array
 
 Return ONLY a JSON array of strings. No other text.
-Example: ["Plays Elden Ring", "Sleep schedule is inverted — sleeps at 6am", "Has a brother they don't talk to"]`;
+Example: ["Plays Elden Ring", "Sleep schedule is inverted", "Has a brother they don't talk to"]`;
 
 export async function extractMemoryFromSession(
   messages: Message[]
@@ -332,8 +382,6 @@ export async function extractMemoryFromSession(
 
   try {
     const result = await simpleChat(prompt, EXTRACTION_SYSTEM);
-
-    // Parse the JSON array
     const cleaned = result.trim().replace(/```json|```/g, "").trim();
     const facts = JSON.parse(cleaned);
 

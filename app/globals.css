@@ -16,6 +16,8 @@ html, body {
   color: #c8c8c8;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* Hide scrollbars everywhere */
@@ -39,14 +41,39 @@ html, body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Input focus — subtle */
-textarea:focus {
+/* Chat composer underline focus — avoids conflicting with bordered fields elsewhere */
+textarea.tobira-chat-input:focus,
+textarea.tobira-chat-input:focus-visible {
   border-bottom-color: #444 !important;
 }
 
-/* Button hover states */
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 1px solid #383838;
+  outline-offset: 3px;
+}
+
+button:focus:not(:focus-visible),
+textarea:focus:not(:focus-visible),
+input:focus:not(:focus-visible) {
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #303030;
+  opacity: 1;
+}
+
+/* Button hover — slight soften, not a flash */
 button:hover {
-  opacity: 0.7;
+  opacity: 0.88;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* Selection color */
@@ -60,7 +87,17 @@ button:hover {
   50% { opacity: 0.7; }
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes familyGlow {
+  0%, 100% { background-color: #2a2a2a; box-shadow: none; }
+  50% { background-color: #4a4a4a; box-shadow: 0 0 6px #3a3a3a; }
+}
+
+@keyframes familyGlow {
+  0%, 100% { background-color: #2a2a2a; box-shadow: none; }
+  50% { background-color: #555; box-shadow: 0 0 8px rgba(80, 80, 80, 0.4); }
 }
