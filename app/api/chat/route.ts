@@ -6,7 +6,14 @@
 // GET returns Ollama health + family notification status.
 
 import { streamChat, checkOllama } from "@/lib/ollama";
-import { getMemoryContext, saveSession, type Message } from "@/lib/memory";
+import {
+  getMemoryContext,
+  loadMemory,
+  saveMemory,
+  saveSession,
+  type Memory,
+  type Message,
+} from "@/lib/memory";
 import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
@@ -17,9 +24,6 @@ export const dynamic = "force-dynamic";
 
 // ============================================================
 // FAMILY NOTIFICATION CHECK
-// Reads family messages directly from filesystem.
-// Called on every health check — lightweight, no API roundtrip.
-// Returns only count metadata — never message content.
 // ============================================================
 
 function getFamilyNotification(sessionId: string): {
@@ -45,26 +49,23 @@ function getFamilyNotification(sessionId: string): {
       type?: string;
     }>;
 
-    const unsurfaced = data.filter(m => !m.surfaced);
-    const hasUnsent = unsurfaced.some(m => m.type === "unsent_letter");
+    // Only count messages FROM family — never unsent_letter
+    const familyMessages = data.filter(
+      m => !m.surfaced && (m.type === "message" || !m.type)
+    );
 
-    // Only count messages FROM family — never unsent_letter (user → family direction)
-const familyMessages = data.filter(
-  m => !m.surfaced && (m.type === "message" || !m.type)
-);
-
-return {
-  hasNew: familyMessages.length > 0,
-  count: familyMessages.length,
-  hasUnsent: false,
-};
+    return {
+      hasNew: familyMessages.length > 0,
+      count: familyMessages.length,
+      hasUnsent: false,
+    };
   } catch {
     return { hasNew: false, count: 0, hasUnsent: false };
   }
 }
 
 // ============================================================
-// POST — Chat endpoint (unchanged)
+// POST — Chat endpoint
 // ============================================================
 
 export async function POST(req: NextRequest) {
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
       return new Response(
         JSON.stringify({
           error: "ollama_not_running",
-          message: health.error
+          message: health.error,
         }),
         { status: 503 }
       );
@@ -96,7 +97,52 @@ export async function POST(req: NextRequest) {
       memoryContext = undefined;
     }
 
-    const stream = await streamChat({ messages, memoryContext });
+    const stream = await streamChat({
+      messages,
+      memoryContext,
+      onToolCall: (name, args) => {
+        // Gemma decided mid-conversation this is worth remembering
+        if (name === "save_memory" && args.fact && sessionId) {
+          try {
+            const memory: Memory = loadMemory(sessionId) ?? {
+              sessionId,
+              createdAt: Date.now(),
+              lastActiveAt: Date.now(),
+              sessions: [],
+              facts: [],
+              totalMessages: 0,
+            };
+            if (!memory.facts.includes(args.fact)) {
+              memory.facts.push(args.fact);
+              memory.facts = [...new Set(memory.facts)].slice(-30);
+              memory.lastActiveAt = Date.now();
+              saveMemory(memory);
+              // ── TOOL CALL LOG ──
+              console.log("\n╭─ tobira saved (live) ───────────────────────────────");
+              console.log(`│  + ${args.fact}`);
+              console.log("╰─────────────────────────────────────────────────────\n");
+            }
+          } catch { /* silent */ }
+        }
+        if (name === "note_feeling" && args.theme && sessionId) {
+          try {
+            const memory = loadMemory(sessionId);
+            if (memory) {
+              const theme = `[feeling: ${args.theme}]`;
+              if (!memory.facts.includes(theme)) {
+                memory.facts.push(theme);
+                memory.facts = [...new Set(memory.facts)].slice(-30);
+                saveMemory(memory);
+                console.log("\n╭─ tobira noted (live) ───────────────────────────────");
+                console.log(`│  ~ ${args.theme}`);
+                console.log("╰─────────────────────────────────────────────────────\n");
+              }
+            }
+          } catch { /* silent */ }
+        }
+      },
+    });
+
     const reader = stream.getReader();
     let fullAssistantResponse = "";
 
@@ -142,12 +188,25 @@ export async function POST(req: NextRequest) {
               },
             ];
 
-            saveSession(sessionId, fullConversation).catch(err => {
-              console.error("Memory save error:", err);
-            });
+            // ── SESSION SAVE LOG ──
+            saveSession(sessionId, fullConversation)
+              .then(() => {
+                // Load memory to show what was extracted
+                const mem = loadMemory(sessionId);
+                if (mem && mem.facts.length > 0) {
+                  console.log("\n╭─ tobira holds ──────────────────────────────────────");
+                  mem.facts.slice(-5).forEach(f => {
+                    console.log(`│  · ${f}`);
+                  });
+                  console.log("╰─────────────────────────────────────────────────────\n");
+                }
+              })
+              .catch((err: Error) => {
+                console.error("Memory save error:", err);
+              });
           }
         }
-      }
+      },
     });
 
     return new Response(sseStream, {
@@ -169,8 +228,6 @@ export async function POST(req: NextRequest) {
 
 // ============================================================
 // GET — Health check + family notification
-// Accepts optional ?session= param to include family status.
-// TobiraChat calls this on load with the session ID.
 // ============================================================
 
 export async function GET(req: NextRequest) {

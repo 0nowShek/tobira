@@ -66,6 +66,8 @@ export interface OllamaRequest {
   memoryContext?: MemoryContext;
   familyContext?: string;
   onToken?: (token: string) => void;
+  // Called when Gemma decides to save something — route.ts handles the actual write
+  onToolCall?: (name: string, args: Record<string, string>) => void;
 }
 
 export interface OllamaResponse {
@@ -170,9 +172,53 @@ function stripThinking(raw: string): string {
 }
 
 // ============================================================
-// CORE CHAT FUNCTION — WITH MULTIMODAL SUPPORT
-// Accepts images as base64 strings in the last user message.
-// Gemma 4 processes text + images natively.
+// FUNCTION CALLING TOOLS
+// Gemma 4 decides mid-conversation what is worth remembering.
+// The model calls save_memory() or note_feeling() when it
+// judges something concrete or significant was shared.
+// ============================================================
+
+const TOBIRA_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'save_memory',
+      description: 'Save a concrete fact about this person worth remembering across sessions. Call this when they share something specific they like, used to do, care about, or have experienced. NOT for emotional states.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fact: {
+            type: 'string',
+            description: 'One short sentence. Concrete and specific. Example: Used to draw buildings as a kid'
+          }
+        },
+        required: ['fact']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'note_feeling',
+      description: 'Note an anonymous emotional theme. Use when someone shares something significant. Store the feeling not the words.',
+      parameters: {
+        type: 'object',
+        properties: {
+          theme: {
+            type: 'string',
+            description: 'One anonymous phrase. Example: exhaustion from pretending'
+          }
+        },
+        required: ['theme']
+      }
+    }
+  }
+];
+
+// ============================================================
+// CORE CHAT FUNCTION — MULTIMODAL + FUNCTION CALLING
+// Images passed directly to Gemma 4 vision.
+// Gemma 4 decides what to remember via native tool calls.
 // ============================================================
 
 export async function streamChat(request: OllamaRequest): Promise<ReadableStream<string>> {
@@ -210,12 +256,13 @@ export async function streamChat(request: OllamaRequest): Promise<ReadableStream
     body: JSON.stringify({
       model: MODEL,
       messages: ollamaMessages,
+      tools: TOBIRA_TOOLS,
       stream: false,
       options: {
-        temperature: 1.1,
+        temperature: 0.9,
         top_p: 0.95,
-        top_k: 50,
-        num_predict: 500, // needs budget for thinking + response
+        top_k: 40,
+        num_predict: 1024,
       }
     })
   });
