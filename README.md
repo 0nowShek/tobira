@@ -8,7 +8,7 @@ Not a mental health chatbot. No recovery agenda. No pushing. It stays.
 
 ## Demo
 
-[Watch the demo video](https://youtube.com) ← link added after upload
+[Watch the demo video](https://youtu.be/FroXR8GNNFE)
 
 Tobira runs entirely on your device. Clone the repo, follow the setup instructions, and it works.
 
