@@ -80,7 +80,7 @@ export interface OllamaResponse {
 // ============================================================
 
 function buildMemoryPreamble(memory: MemoryContext): string {
-  if (!memory || memory.sessionCount === 0) return "";
+  if (!memory) return "";
 
   const lines: string[] = [];
 
@@ -106,6 +106,18 @@ function buildMemoryPreamble(memory: MemoryContext): string {
   }
 
   if (lines.length === 0) return "";
+
+  // ── TOBIRA MEMORY LOG ──
+  console.log("\n╭─ tobira remembers ──────────────────────────────────");
+  if (memory.sessionCount > 1) {
+    console.log(`│  ${memory.sessionCount} sessions`);
+  }
+  if (memory.extractedFacts && memory.extractedFacts.length > 0) {
+    memory.extractedFacts.forEach((fact: string) => {
+      console.log(`│  · ${fact}`);
+    });
+  }
+  console.log("╰─────────────────────────────────────────────────────\n");
 
   return lines.join("\n") +
     "\n\n[Use this context naturally in conversation — the way a friend would. " +
@@ -223,7 +235,6 @@ const TOBIRA_TOOLS = [
 
 export async function streamChat(request: OllamaRequest): Promise<ReadableStream<string>> {
   const { messages, memoryContext, familyContext, onToken } = request;
-  // TODO: parse data.message.tool_calls and invoke request.onToolCall when present
 
   const memoryPreamble = memoryContext ? buildMemoryPreamble(memoryContext) : "";
   const familyPreamble = familyContext ? familyContext + "\n\n" : "";
@@ -258,7 +269,7 @@ export async function streamChat(request: OllamaRequest): Promise<ReadableStream
       model: MODEL,
       messages: ollamaMessages,
       tools: TOBIRA_TOOLS,
-      stream: false, // full response first; word delay below simulates streaming for the UI
+      stream: false,
       options: {
         temperature: 0.9,
         top_p: 0.95,

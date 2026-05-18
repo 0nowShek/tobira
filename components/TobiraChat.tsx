@@ -881,7 +881,7 @@ const [familySummary, setFamilySummary] = useState('');
           {voiceInputAvailable && (
             <button
               type="button"
-              style={{ ...styles.iconButton, color: isRecording ? '#884444' : '#333' }}
+              style={{ ...styles.iconButton, color: isRecording ? '#884444' : '#787373' }}
               onMouseDown={handleMicStart}
               onMouseUp={handleMicEnd}
               onTouchStart={handleMicStart}
@@ -939,7 +939,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 'calc(16px + env(safe-area-inset-top, 0px)) calc(20px + env(safe-area-inset-right, 0px)) 0 calc(20px + env(safe-area-inset-left, 0px))',
     flexShrink: 0,
   },
-  wordmark: { color: '#444', fontSize: '12px', letterSpacing: '0.15em', userSelect: 'none' },
+  wordmark: { color: '#a8a2a2', fontSize: '12px', letterSpacing: '0.15em', userSelect: 'none' },
   menuButton: {
     background: 'none', border: 'none', color: '#444', fontSize: '18px',
     cursor: 'pointer', padding: '4px 8px', fontFamily: 'inherit',
@@ -971,8 +971,8 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'flex-start', justifyContent: 'center',
     paddingBottom: '60px', gap: '10px', animation: 'fadeIn 1.5s ease',
   },
-  onboardingMessage: { color: '#555', fontSize: '15px', letterSpacing: '0.02em', fontStyle: 'italic', margin: 0 },
-  onboardingSubtext: { color: '#252525', fontSize: '11px', letterSpacing: '0.06em', margin: 0 },
+  onboardingMessage: { color: '#919090', fontSize: '15px', letterSpacing: '0.02em', fontStyle: 'italic', margin: 0 },
+  onboardingSubtext: { color: '#8b8a8a', fontSize: '11px', letterSpacing: '0.06em', margin: 0 },
   messageWrapper: { display: 'flex', width: '100%', position: 'relative', userSelect: 'text' },
   messageBubble: {
     maxWidth: '80%', lineHeight: '1.6', wordBreak: 'break-word',
@@ -1013,7 +1013,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '8px 0', resize: 'none', outline: 'none', caretColor: '#777',
   },
   iconButton: {
-    background: 'none', border: 'none', color: '#333', cursor: 'pointer',
+    background: 'none', border: 'none', color: '#787373', cursor: 'pointer',
     padding: '8px 0', flexShrink: 0, lineHeight: 1,
     transition: 'color 0.2s', display: 'flex', alignItems: 'center',
   },
