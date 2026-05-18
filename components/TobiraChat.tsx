@@ -75,6 +75,7 @@ export default function TobiraChat() {
   const [isRecording, setIsRecording] = useState(false);
   const [voiceInputAvailable, setVoiceInputAvailable] = useState(false);
 
+  // Family bridge — dot when someone left a message; panel to read original or summary
   const [hasFamily, setHasFamily] = useState(false);
 const [showFamilyNotice, setShowFamilyNotice] = useState(false);
 const [familyNoticeCount, setFamilyNoticeCount] = useState(0);

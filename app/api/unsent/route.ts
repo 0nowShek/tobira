@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, theme: null });
     }
 
-    // Store theme in memory if we have a session
+    // Anonymous theme only — letter body is never written to disk
     if (sessionId && typeof sessionId === 'string') {
       try {
         const memory = loadMemory(sessionId);

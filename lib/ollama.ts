@@ -223,6 +223,7 @@ const TOBIRA_TOOLS = [
 
 export async function streamChat(request: OllamaRequest): Promise<ReadableStream<string>> {
   const { messages, memoryContext, familyContext, onToken } = request;
+  // TODO: parse data.message.tool_calls and invoke request.onToolCall when present
 
   const memoryPreamble = memoryContext ? buildMemoryPreamble(memoryContext) : "";
   const familyPreamble = familyContext ? familyContext + "\n\n" : "";
@@ -257,7 +258,7 @@ export async function streamChat(request: OllamaRequest): Promise<ReadableStream
       model: MODEL,
       messages: ollamaMessages,
       tools: TOBIRA_TOOLS,
-      stream: false,
+      stream: false, // full response first; word delay below simulates streaming for the UI
       options: {
         temperature: 0.9,
         top_p: 0.95,

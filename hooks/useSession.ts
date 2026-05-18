@@ -81,7 +81,7 @@ export function useSession(
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (messagesRef.current.length >= 2) {
-        // Use sendBeacon for reliable close-time saves
+        // sendBeacon: fire-and-forget on tab close (no await; best-effort)
         const data = JSON.stringify({
           action: 'save',
           sessionId: sessionIdRef.current,

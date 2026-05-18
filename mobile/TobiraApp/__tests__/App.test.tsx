@@ -1,3 +1,4 @@
+// Smoke test for React Native shell — requires @types/jest in tsconfig for tsc
 /**
  * @format
  */

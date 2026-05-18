@@ -24,6 +24,7 @@ interface FamilyMessage {
   familySeen?: boolean; // family has viewed this letter
 }
 
+// Session id hashed — family store filenames reveal no raw ids
 function getFamilyPath(sessionId: string): string {
   const hash = crypto
     .createHash('sha256')
@@ -84,6 +85,7 @@ export async function POST(req: NextRequest) {
       return new Response('Missing sessionId', { status: 400 });
     }
 
+    // Family links pass base64; in-app calls pass the raw UUID
     const sessionId = rawSessionId.length > 40
       ? decodeSessionId(rawSessionId)
       : rawSessionId;

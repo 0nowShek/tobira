@@ -82,7 +82,7 @@ interface FamilyMessage {
     }
   }
   
-  // Share link generator (client-side)
+  // Share link for settings drawer — family opens /family?for=<base64 session id>
   export function generateShareLink(sessionId: string): string {
     const baseUrl = window.location.origin;
     const encoded = btoa(sessionId).replace(/=/g, '');

@@ -1,3 +1,7 @@
+// app/api/tts/route.ts
+// TOBIRA — Text-to-Speech proxy
+// ElevenLabs API key stays server-side. Client sends text, receives audio/mpeg.
+
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -47,6 +51,7 @@ export async function POST(req: NextRequest) {
   const modelId =
     process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_multilingual_v2";
 
+  // Proxy to ElevenLabs — response body streamed back unchanged
   const upstream = await fetch(
     `${UPSTREAM_URL}/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
     {

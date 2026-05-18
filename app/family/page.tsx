@@ -104,7 +104,7 @@ export default function FamilyBridge() {
 
   async function handleReadIt() {
     setShowLetter(true);
-    // Mark all new letters as seen
+    // Seen state persists — total count at the door never decreases
     const newLetterIds = letters.map(l => l.id);
     await markLettersSeen(newLetterIds);
   }

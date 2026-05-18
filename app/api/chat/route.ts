@@ -33,6 +33,7 @@ function getFamilyNotification(sessionId: string): {
 } {
   try {
     const FAMILY_DIR = path.join(process.cwd(), ".tobira", "family");
+    // Hashed filename — session id never appears on disk in plaintext
     const hash = crypto
       .createHash("sha256")
       .update(sessionId + "_family")
@@ -100,8 +101,8 @@ export async function POST(req: NextRequest) {
     const stream = await streamChat({
       messages,
       memoryContext,
+      // Live memory writes when model calls save_memory / note_feeling (see lib/ollama.ts)
       onToolCall: (name, args) => {
-        // Gemma decided mid-conversation this is worth remembering
         if (name === "save_memory" && args.fact && sessionId) {
           try {
             const memory: Memory = loadMemory(sessionId) ?? {
@@ -164,6 +165,7 @@ export async function POST(req: NextRequest) {
         } catch (error) {
           controller.error(error);
         } finally {
+          // Persist full turn after stream ends — separate from live tool-call saves above
           const assistantContent = fullAssistantResponse.trim();
           if (sessionId && assistantContent && assistantContent !== "...") {
             const messagesForStorage: Message[] = messages.map((m: {

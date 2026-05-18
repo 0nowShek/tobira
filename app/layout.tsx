@@ -1,4 +1,5 @@
 // app/layout.tsx
+// Root shell — dark viewport only. No chrome; chat pages own the full screen.
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
